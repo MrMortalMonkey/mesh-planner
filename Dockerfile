@@ -3,7 +3,7 @@
 FROM node:22-alpine
 
 WORKDIR /app
-COPY server.js mqtt-live.js linkstore.js ./
+COPY server.js mqtt-live.js linkstore.js protolite.js localnode-tcp.js ./
 COPY public ./public
 
 ENV PORT=8620 \

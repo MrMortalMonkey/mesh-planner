@@ -23,6 +23,18 @@ Or with Docker (pins the right Node, persists data in a volume):
 docker compose up -d
 ```
 
+**Pre-built images**: multi-arch (amd64 + arm64) images are published to GHCR on every
+push to `main` via [`.github/workflows/docker-publish.yml`](.github/workflows/docker-publish.yml):
+
+```
+ghcr.io/mrmortalmonkey/mesh-planner:latest
+```
+
+To use the published image instead of building locally, swap `build: .` for
+`image: ghcr.io/mrmortalmonkey/mesh-planner:latest` in `docker-compose.yml` (or point at a
+`:sha-<short-sha>` tag to pin a specific revision — see the [Packages tab](../../pkgs/container/mesh-planner)
+for available tags).
+
 Type a city, ZIP code, address, or raw `lat, lon` coordinates and hit **Go**, or pan the
 map and click **Analyze current map view**.
 
@@ -32,6 +44,9 @@ map and click **Analyze current map view**.
 |---|---|---|
 | `PORT` | `8620` | HTTP listen port |
 | `DATA_DIR` | `./data` | Corrections, history, reliability, caches, SQLite store |
+| `NODE_SOURCE` | `public` | `public` (liamcottle + meshmap.net, as below) or `local-tcp` (pull the full NodeDB straight from a local Meshtastic device/virtual node's TCP API — no public service contacted for node data) |
+| `LOCAL_NODE_HOST` | `127.0.0.1` | TCP host for `NODE_SOURCE=local-tcp` |
+| `LOCAL_NODE_PORT` | `4403` | TCP port for `NODE_SOURCE=local-tcp` (Meshtastic's standard Stream API port) |
 | `MQTT_REGIONS` | `US` | Comma-separated region trees to ingest for link observations (bandwidth scales with this) |
 | `MQTT_HOST` | `mqtt.meshtastic.org` | MQTT broker for live map reports / observations |
 | `MQTT_DISABLE` | unset | Set `1` to disable the MQTT listener entirely |
@@ -107,6 +122,37 @@ The data feeds three things:
   preset) and terrain up to **z14 (~10 m)** for single-link profiles and z13 for
   viewsheds; area-wide passes stay at z12 for speed.
 
+## Local mesh mode (no public services)
+
+Set `NODE_SOURCE=local-tcp` to skip `meshtastic.liamcottle.net` and
+`meshmap.net` entirely and pull the node database straight from a Meshtastic
+device's TCP Stream API — either a physical node connected to your LAN, or a
+"virtual" node such as [`meshtasticd`](https://meshtastic.org/docs/software/linux/native/)
+running headless with a LoRa radio attached, bridging onto your local mesh.
+Point `LOCAL_NODE_HOST`/`LOCAL_NODE_PORT` at it (default `127.0.0.1:4403`):
+
+```
+NODE_SOURCE=local-tcp LOCAL_NODE_HOST=192.168.1.20 MQTT_DISABLE=1 node server.js
+```
+
+On connect the server requests the full on-device NodeDB
+(`ToRadio.want_config_id`) — this *is* the positioned-node set, so there's no
+5-minute cache like the public path uses. After the initial dump, live
+position/user/telemetry reports keep the map current in real time as
+`localnode-tcp.js` decodes them straight off the `FromRadio` stream (no
+polling). It reconnects automatically if the TCP link drops, and re-requests
+a full dump every 15 minutes as a drift/reboot safety net. `/api/health`
+reports connection state under `localNode`.
+
+Combine this with `MQTT_DISABLE=1` (as above) if you'd rather not have the
+server also reach out to the public MQTT broker for supplemental live
+position data — with `NODE_SOURCE=local-tcp` that blend isn't adding
+anything a directly-connected node doesn't already give you first-hand. Note
+this also switches off per-link SNR observations (calibration, the agreement
+scorecard, HEIGHT EST cards), since those are harvested from the public
+broker's envelope metadata across many gateways — a single local node only
+sees its own reception, not the whole mesh's pairwise links.
+
 ## Point-to-point link inspector
 
 Clicking a node lists every potential link to nodes in range in the right-hand
@@ -168,6 +214,14 @@ and terrain tiles disk-cached locally. API responses are gzipped.
 
 - `server.js` — static files + node-data proxy (5-min cache, bbox filtering) +
   corrections store with history + geocode cache + terrain tile cache
+- `localnode-tcp.js` — `NODE_SOURCE=local-tcp` node source: TCP Stream API
+  client for a local Meshtastic device/virtual node, zero-dependency
+  StreamAPI framing + `FromRadio`/`ToRadio` decoder
+- `mqtt-live.js` — public MQTT broker live feed (map reports + link
+  observation harvesting)
+- `protolite.js` — shared minimal protobuf wire-format reader/writer used by
+  both `mqtt-live.js` and `localnode-tcp.js`
+- `linkstore.js` — per-link SNR observation store (SQLite)
 - `public/js/elevation.js` — terrarium tile prefetch/decode, bilinear elevation queries
 - `public/js/analysis.js` — LOS/Fresnel modeling, link graph, articulation points,
   placement scoring, role suggestions

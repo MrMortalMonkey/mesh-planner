@@ -8,6 +8,14 @@ services:
     environment:
       # comma-separated region trees for link-observation ingest, e.g. US,EU_868
       MQTT_REGIONS: US
+      # Uncomment to pull nodes from a local Meshtastic device/virtual node's
+      # TCP API instead of the public meshmaps — see README's "Local mesh
+      # mode" section. LOCAL_NODE_HOST must be reachable from the container
+      # (host.docker.internal on Docker Desktop, or the LAN IP of the node).
+      # NODE_SOURCE: local-tcp
+      # LOCAL_NODE_HOST: 192.168.1.20
+      # LOCAL_NODE_PORT: 4403
+      # MQTT_DISABLE: 1
     restart: unless-stopped
 
 volumes:

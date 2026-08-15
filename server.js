@@ -28,6 +28,20 @@ const CACHE_TTL_MS = 5 * 60 * 1000; // refetch node DBs at most every 5 min
 const GEO_TTL_MS = 30 * 24 * 3600 * 1000;
 const UA = 'MeshPlanner/1.0 (self-hosted mesh analysis; github-less personal deployment)';
 
+// NODE_SOURCE=public (default) keeps the original liamcottle/meshmap.net
+// blend. NODE_SOURCE=local-tcp replaces it entirely with a live pull from a
+// local Meshtastic device/virtual node's TCP Stream API (LOCAL_NODE_HOST,
+// LOCAL_NODE_PORT — see localnode-tcp.js) — no public service contacted for
+// node data at all.
+const NODE_SOURCE = (process.env.NODE_SOURCE || 'public').trim();
+const LocalNodeTcp = NODE_SOURCE === 'local-tcp' ? require('./localnode-tcp') : null;
+// The local NodeDB is already live in memory (reading it is an O(1) Map
+// filter), so there's no reason to hold a stale cache the way the public
+// HTTP fetch needs to be polite about. TTL 0 means every /api/nodes call
+// re-reads current state instead of risking a snapshot from before the TCP
+// handshake finished.
+const NODE_CACHE_TTL_MS = LocalNodeTcp ? 0 : CACHE_TTL_MS;
+
 fs.mkdirSync(TILE_DIR, { recursive: true });
 
 const MIME = {
@@ -132,6 +146,16 @@ function slimMeshmapNode(id, n) {
 }
 
 async function fetchUpstream() {
+  if (LocalNodeTcp) {
+    const nodes = LocalNodeTcp.getNodes();
+    cache = { at: Date.now(), nodes };
+    const st = LocalNodeTcp.stats();
+    console.log(`[nodes] local TCP NodeDB: ${nodes.length} positioned ` +
+      `(${st.nodeCount} known, connected=${st.connected}, configComplete=${st.configComplete})`);
+    sampleReliability(nodes);
+    return nodes;
+  }
+
   console.log('[nodes] fetching upstream node databases...');
   const t0 = Date.now();
   const headers = { 'User-Agent': UA };
@@ -220,7 +244,7 @@ function sampleReliability(nodes) {
 }
 
 async function getNodes() {
-  if (cache.nodes && Date.now() - cache.at < CACHE_TTL_MS) return cache.nodes;
+  if (cache.nodes && Date.now() - cache.at < NODE_CACHE_TTL_MS) return cache.nodes;
   if (!inflight) inflight = fetchUpstream().finally(() => { inflight = null; });
   try {
     return await inflight;
@@ -552,11 +576,13 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/health') {
       return sendJson(req, res, {
         ok: true,
+        nodeSource: NODE_SOURCE,
         cachedNodes: cache.nodes ? cache.nodes.length : 0,
         cacheAge: cache.at ? Date.now() - cache.at : null,
         overrides: Object.keys(overrides).length,
         mqtt: MqttLive.stats(),
         linkObs: LinkStore.stats(),
+        ...(LocalNodeTcp ? { localNode: LocalNodeTcp.stats() } : {}),
       });
     }
     return serveStatic(req, res, url);
@@ -572,6 +598,9 @@ const server = http.createServer(async (req, res) => {
 server.listen(PORT, () => {
   console.log(`Mesh Planner running at http://localhost:${PORT}`);
   console.log(`Data dir: ${DATA_DIR} (${Object.keys(overrides).length} overrides)`);
+  console.log(`Node source: ${NODE_SOURCE}` +
+    (LocalNodeTcp ? ` (${process.env.LOCAL_NODE_HOST || '127.0.0.1'}:${process.env.LOCAL_NODE_PORT || 4403})` : ''));
+  if (LocalNodeTcp) LocalNodeTcp.start();
   getNodes().catch((e) => console.warn('[nodes] warmup failed:', e.message));
   const obsEnabled = LinkStore.init(DATA_DIR);
   MqttLive.start(obsEnabled ? { onLinkObs: LinkStore.add } : {});
@@ -581,6 +610,7 @@ server.listen(PORT, () => {
 for (const sig of ['SIGTERM', 'SIGINT']) {
   process.on(sig, () => {
     try { LinkStore.flush(); } catch {}
+    try { if (LocalNodeTcp) LocalNodeTcp.stop(); } catch {}
     process.exit(0);
   });
 }
