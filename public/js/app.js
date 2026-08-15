@@ -160,6 +160,7 @@
     return { minLat: lat - dLat, maxLat: lat + dLat, minLon: lon - dLon, maxLon: lon + dLon };
   }
 
+  let currentNodeSource = 'public';
   async function runAnalysis(bbox, label, keepView = false) {
     lastQuery = { bbox, label, keepView };
     closeEditor();
@@ -171,7 +172,9 @@
 
     try {
       // 1) nodes
-      setStatus(`Fetching mesh nodes for ${label}… (first fetch downloads the global DB, ~10 s)`);
+      setStatus(currentNodeSource === 'local-tcp'
+        ? `Fetching mesh nodes for ${label}…`
+        : `Fetching mesh nodes for ${label}… (first fetch downloads the global DB, ~10 s)`);
       setProgress(0.05);
       const qs = new URLSearchParams({
         minLat: bbox.minLat, maxLat: bbox.maxLat,
@@ -1723,7 +1726,64 @@ ${wpts}
     runAnalysis(bbox, 'Current view');
   });
 
-  // ---- startup: permalink hash if present, else Sioux Falls, SD (57103) -----
+  // ---- startup: permalink hash > local mesh (auto) > server DEFAULT_LOCATION > Sioux Falls fallback
+
+  async function fetchConfig() {
+    try { return await (await fetch('/api/config')).json(); } catch { return { nodeSource: 'public', defaultLocation: null }; }
+  }
+
+  async function fetchLocalBounds() {
+    try {
+      const r = await fetch('/api/bounds');
+      return r.ok ? await r.json() : null;
+    } catch { return null; }
+  }
+
+  // A single node (or several tightly clustered ones) gives a zero/near-zero
+  // area bbox — pad it out to something a human can actually see, with a
+  // floor so it never collapses to a dot.
+  function boundsToBbox(b) {
+    const spanKm = Math.max(
+      Analysis.haversine(b.minLat, b.minLon, b.maxLat, b.minLon) / 1000,
+      Analysis.haversine(b.minLat, b.minLon, b.minLat, b.maxLon) / 1000,
+    );
+    const radiusKm = Math.max((spanKm / 2) * 1.3, 3);
+    return bboxAround(b.centerLat, b.centerLon, radiusKm);
+  }
+
+  async function goToLocalBounds(b) {
+    const bbox = boundsToBbox(b);
+    map.fitBounds([[bbox.minLat, bbox.minLon], [bbox.maxLat, bbox.maxLon]]);
+    runAnalysis(bbox, 'Local mesh');
+  }
+
+  async function startLocalMesh(cfg) {
+    const bounds = await fetchLocalBounds();
+    if (bounds && bounds.available) { await goToLocalBounds(bounds); return; }
+
+    // No positioned nodes yet (TCP connection/NodeDB dump still in
+    // progress) — park somewhere sensible while we wait rather than
+    // showing a blank world map.
+    if (cfg.defaultLocation) {
+      try {
+        const hits = await geocode(cfg.defaultLocation);
+        if (hits.length) startAt(hits[0], 11);
+        else setStatus('Waiting for local node data…');
+      } catch { setStatus('Waiting for local node data…'); }
+    } else {
+      setStatus('Waiting for local node data…');
+    }
+
+    // Poll until the local mesh reports positioned nodes, then snap the
+    // view to it automatically — no page reload needed.
+    let tries = 0;
+    const timer = setInterval(async () => {
+      if (++tries > 40) { clearInterval(timer); return; } // ~2.5 min ceiling
+      const b = await fetchLocalBounds();
+      if (b && b.available) { clearInterval(timer); await goToLocalBounds(b); }
+    }, 4000);
+  }
+
   (async () => {
     await migrateLegacyOverrides();
     await refreshOverrides();
@@ -1733,8 +1793,19 @@ ${wpts}
         $('radius-select').value = String(h.radius);
       }
       startAt({ lat: h.lat, lon: h.lon, label: `${h.lat.toFixed(4)}, ${h.lon.toFixed(4)}` });
-    } else {
-      startAt({ lat: 43.53569, lon: -96.69025, label: 'Sioux Falls (57103)' }, 12);
+      return;
     }
+
+    const cfg = await fetchConfig();
+    currentNodeSource = cfg.nodeSource;
+    if (cfg.nodeSource === 'local-tcp') { await startLocalMesh(cfg); return; }
+
+    if (cfg.defaultLocation) {
+      try {
+        const hits = await geocode(cfg.defaultLocation);
+        if (hits.length) { startAt(hits[0], 12); return; }
+      } catch { /* fall through to hardcoded default */ }
+    }
+    startAt({ lat: 43.53569, lon: -96.69025, label: 'Sioux Falls (57103)' }, 12);
   })();
 })();
