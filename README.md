@@ -23,6 +23,18 @@ Or with Docker (pins the right Node, persists data in a volume):
 docker compose up -d
 ```
 
+**Pre-built images**: multi-arch (amd64 + arm64) images are published to GHCR on every
+push to `main` via [`.github/workflows/docker-publish.yml`](.github/workflows/docker-publish.yml):
+
+```
+ghcr.io/mrmortalmonkey/mesh-planner:latest
+```
+
+To use the published image instead of building locally, swap `build: .` for
+`image: ghcr.io/mrmortalmonkey/mesh-planner:latest` in `docker-compose.yml` (or point at a
+`:sha-<short-sha>` tag to pin a specific revision — see the [Packages tab](../../pkgs/container/mesh-planner)
+for available tags).
+
 Type a city, ZIP code, address, or raw `lat, lon` coordinates and hit **Go**, or pan the
 map and click **Analyze current map view**.
 
