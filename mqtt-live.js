@@ -10,6 +10,7 @@
 // Public broker credentials are the well-known community ones (meshdev).
 
 const net = require('net');
+const { pbFields, field, vNum, vInt32, sfixed32 } = require('./protolite');
 
 const HOST = process.env.MQTT_HOST || 'mqtt.meshtastic.org';
 const PORT = parseInt(process.env.MQTT_PORT || '1883', 10);
@@ -35,46 +36,7 @@ const PRESET_NAMES = ['LONG_FAST', 'LONG_SLOW', 'VERY_LONG_SLOW', 'MEDIUM_SLOW',
   'MEDIUM_FAST', 'SHORT_SLOW', 'SHORT_FAST', 'LONG_MODERATE', 'SHORT_TURBO'];
 const PORTNUM_MAP_REPORT = 73;
 
-// ---- protobuf wire-format reader --------------------------------------------
-
-function pbVarint(buf, i) {
-  let v = 0n, shift = 0n;
-  for (;;) {
-    if (i >= buf.length) throw new Error('truncated varint');
-    const b = buf[i++];
-    v |= BigInt(b & 0x7f) << shift;
-    if (!(b & 0x80)) break;
-    shift += 7n;
-    if (shift > 63n) throw new Error('varint too long');
-  }
-  return [v, i];
-}
-
-function pbFields(buf) {
-  const out = [];
-  let i = 0;
-  while (i < buf.length) {
-    let tag;
-    [tag, i] = pbVarint(buf, i);
-    const f = Number(tag >> 3n), wt = Number(tag & 7n);
-    if (wt === 0) { let v; [v, i] = pbVarint(buf, i); out.push({ f, wt, v }); }
-    else if (wt === 2) {
-      let len; [len, i] = pbVarint(buf, i);
-      const l = Number(len);
-      if (i + l > buf.length) throw new Error('truncated bytes field');
-      out.push({ f, wt, v: buf.subarray(i, i + l) }); i += l;
-    } else if (wt === 5) { out.push({ f, wt, v: buf.subarray(i, i + 4) }); i += 4; }
-    else if (wt === 1) { out.push({ f, wt, v: buf.subarray(i, i + 8) }); i += 8; }
-    else throw new Error(`unsupported wire type ${wt}`);
-  }
-  return out;
-}
-
-const vNum = (v) => Number(BigInt.asIntN(64, v));
-const vInt32 = (v) => Number(BigInt.asIntN(32, v));
-const sfixed32 = (b) => b.readInt32LE(0);
-
-function field(fields, f) { return fields.find((x) => x.f === f); }
+// ---- MapReport payload parser (wire-format reader lives in protolite.js) ---
 
 function parseMapReport(buf) {
   const fs = pbFields(buf);
