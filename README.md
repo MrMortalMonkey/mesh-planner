@@ -47,6 +47,7 @@ map and click **Analyze current map view**.
 | `NODE_SOURCE` | `public` | `public` (liamcottle + meshmap.net, as below) or `local-tcp` (pull the full NodeDB straight from a local Meshtastic device/virtual node's TCP API — no public service contacted for node data) |
 | `LOCAL_NODE_HOST` | `127.0.0.1` | TCP host for `NODE_SOURCE=local-tcp` |
 | `LOCAL_NODE_PORT` | `4403` | TCP port for `NODE_SOURCE=local-tcp` (Meshtastic's standard Stream API port) |
+| `DEFAULT_LOCATION` | unset | City/state/ZIP/`lat,lon` to park the map on at startup. In `local-tcp` mode this is only used while waiting for the first positioned node (see below) — once the local mesh reports a position, the map re-centers on it automatically and stays there on future loads. In `public` mode it replaces the built-in Sioux Falls, SD default. |
 | `MQTT_REGIONS` | `US` | Comma-separated region trees to ingest for link observations (bandwidth scales with this) |
 | `MQTT_HOST` | `mqtt.meshtastic.org` | MQTT broker for live map reports / observations |
 | `MQTT_DISABLE` | unset | Set `1` to disable the MQTT listener entirely |
@@ -152,6 +153,15 @@ this also switches off per-link SNR observations (calibration, the agreement
 scorecard, HEIGHT EST cards), since those are harvested from the public
 broker's envelope metadata across many gateways — a single local node only
 sees its own reception, not the whole mesh's pairwise links.
+
+**The map centers itself on the local mesh automatically** — no city search
+needed. On load the frontend asks `/api/bounds` for the current NodeDB's
+positioned extent and fits the view to it; if no positioned nodes exist yet
+(the TCP handshake/NodeDB dump is still in progress on a fresh connection),
+it polls until one shows up, so the very first pageview is likely still
+useful even before the local node has finished streaming. Set
+`DEFAULT_LOCATION` to park the map somewhere meaningful during that brief
+window instead of the default world view.
 
 ## Point-to-point link inspector
 

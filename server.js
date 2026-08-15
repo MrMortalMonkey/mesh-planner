@@ -573,6 +573,35 @@ const server = http.createServer(async (req, res) => {
     }
     const tm = url.pathname.match(/^\/tiles\/(\d+)\/(\d+)\/(\d+)\.png$/);
     if (tm) return await handleTile(req, res, tm[1], tm[2], tm[3]);
+    if (url.pathname === '/api/config') {
+      return sendJson(req, res, {
+        nodeSource: NODE_SOURCE,
+        defaultLocation: process.env.DEFAULT_LOCATION || null,
+      });
+    }
+    if (url.pathname === '/api/bounds') {
+      // Lets the frontend center/fit the map on the actual local mesh
+      // instead of a hardcoded default city — only meaningful in
+      // NODE_SOURCE=local-tcp mode, where we know the full node set
+      // without needing a bbox query first.
+      if (!LocalNodeTcp) return sendJson(req, res, { available: false });
+      const nodes = LocalNodeTcp.getNodes();
+      if (!nodes.length) return sendJson(req, res, { available: false, count: 0 });
+      let minLat = 90, maxLat = -90, minLon = 180, maxLon = -180;
+      for (const n of nodes) {
+        if (n.lat < minLat) minLat = n.lat;
+        if (n.lat > maxLat) maxLat = n.lat;
+        if (n.lon < minLon) minLon = n.lon;
+        if (n.lon > maxLon) maxLon = n.lon;
+      }
+      return sendJson(req, res, {
+        available: true,
+        count: nodes.length,
+        minLat, maxLat, minLon, maxLon,
+        centerLat: (minLat + maxLat) / 2,
+        centerLon: (minLon + maxLon) / 2,
+      });
+    }
     if (url.pathname === '/api/health') {
       return sendJson(req, res, {
         ok: true,
